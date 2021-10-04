@@ -1,8 +1,40 @@
-properties([buildDiscarder(logRotator(numToKeepStr: '50'))])
+/*
+** Variables.
+*/
 
-stage('Source') {
+def buildBranch = env.BRANCH_NAME
+if (env.CHANGE_BRANCH) {
+  buildBranch = env.CHANGE_BRANCH
+}
+
+/*
+** Functions
+*/
+
+def checkoutCentreonBuild(buildBranch) {
+  def getCentreonBuildGitConfiguration = { branchName -> [
+    $class: 'GitSCM',
+    branches: [[name: "refs/heads/${branchName}"]],
+    doGenerateSubmoduleConfigurations: false,
+    userRemoteConfigs: [[
+      $class: 'UserRemoteConfig',
+      url: "ssh://git@github.com/centreon/centreon-build.git"
+    ]]
+  ]}
+
+  dir('centreon-build') {
+    try {
+      checkout(getCentreonBuildGitConfiguration(buildBranch))
+    } catch(e) {
+      echo "branch '${buildBranch}' does not exist in centreon-build, then fallback to master"
+      checkout(getCentreonBuildGitConfiguration('master'))
+    }
+  }
+}
+
+stage('Deliver sources') {
   node {
-    sh 'setup_centreon_build.sh'
+    checkoutCentreonBuild(buildBranch)
     dir('centreon-plugins') {
       checkout scm
     }
@@ -14,36 +46,31 @@ stage('Source') {
     withSonarQubeEnv('SonarQubeDev') {
       sh './centreon-build/jobs/plugins/plugins-analysis.sh'
     }
+    def qualityGate = waitForQualityGate()
+    if (qualityGate.status != 'OK') {
+      currentBuild.result = 'FAIL'
+    }
   }
 }
 
-try {
-  // sonarQube step to get qualityGate result
-  stage('Quality gate') {
-    node {
-      def qualityGate = waitForQualityGate()
-      if (qualityGate.status != 'OK') {
-        currentBuild.result = 'FAIL'
-      }
-      if ((currentBuild.result ?: 'SUCCESS') != 'SUCCESS') {
-        error("Quality gate failure: ${qualityGate.status}.");
-      }
-    }
+stage('RPMs Packaging') {
+  node {
+    checkoutCentreonBuild(buildBranch)
+    sh './centreon-build/jobs/plugins/plugins-package.sh'
   }
+}
+if ((currentBuild.result ?: 'SUCCESS') != 'SUCCESS') {
+  error('Package stage failure.');
+}
 
-  stage('Package') {
-    parallel 'all': {
-      node {
-        sh 'setup_centreon_build.sh'
-        sh './centreon-build/jobs/plugins/plugins-package.sh'
-      }
-    }
-    if ((currentBuild.result ?: 'SUCCESS') != 'SUCCESS') {
-      error('Package stage failure.');
+if ((env.BRANCH_NAME == 'master')) {
+  stage('RPMs delivery to unstable') {
+    node {
+      checkoutCentreonBuild(buildBranch)
+      sh './centreon-build/jobs/plugins/plugins-package.sh'
     }
   }
-} catch(e) {
-  if (env.BRANCH_NAME == 'master') {
-    slackSend channel: "#monitoring-metrology", color: "#F30031", message: "*FAILURE*: `CENTREON PLUGINS` <${env.BUILD_URL}|build #${env.BUILD_NUMBER}> on branch ${env.BRANCH_NAME}\n*COMMIT*: <https://github.com/centreon/centreon-plugins/commit/${source.COMMIT}|here> by ${source.COMMITTER}\n*INFO*: ${e}"
+  if ((currentBuild.result ?: 'SUCCESS') != 'SUCCESS') {
+    error('Delivery stage failure.');
   }
 }
