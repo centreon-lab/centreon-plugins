@@ -324,8 +324,8 @@ Resources discovery.
 =item B<--service>
 
 Choose the service from which discover
-resources (Can be: 'VPC', 'EC2', 'RDS',
-'ELB', 'VPN') (Mandatory).
+resources (Can be: 'APIGATEWAY', 'EC2', 'ELB', 'DYNAMODB',
+'KINESIS', 'RDS', 'S3', 'VPC', 'VPN') (Mandatory).
 
 =item B<--prettify>
 
